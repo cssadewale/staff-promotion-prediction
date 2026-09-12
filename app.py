@@ -12,6 +12,7 @@ import numpy as np
 import joblib
 import os
 import gdown
+from pathlib import Path
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -233,25 +234,36 @@ st.markdown("""
 
 DATA_FILE_ID = "1ZvMu-zl7FySIFy61rnPOa9EQfkkE8KfK"
 DATA_URL     = f"https://drive.google.com/uc?id={DATA_FILE_ID}"
-DATA_PATH    = "data.csv"
-MODEL_CACHE  = "model_cache.joblib"
+BASE_DIR = Path(__file__).resolve().parent
+DATA_PATH    = BASE_DIR / "data.csv"
+MODEL_CACHE  = BASE_DIR / "model_cache.joblib"
+REFERENCE_YEAR = 2025  # fixed to the project training convention
 
 @st.cache_resource(show_spinner="🔧 Building prediction model — this takes ~60 seconds on first load only...")
 def build_model():
     # ── Step 1: Load cached model if it exists ──────────────────────────────
-    if os.path.exists(MODEL_CACHE):
-        return joblib.load(MODEL_CACHE)
+    if MODEL_CACHE.exists():
+        try:
+            return joblib.load(MODEL_CACHE)
+        except Exception:
+            # Never let a stale/corrupt runtime cache prevent retraining.
+            MODEL_CACHE.unlink(missing_ok=True)
 
     # ── Step 2: Download dataset from Google Drive ───────────────────────────
-    if not os.path.exists(DATA_PATH):
-        gdown.download(DATA_URL, DATA_PATH, quiet=False)
+    if not DATA_PATH.exists():
+        downloaded = gdown.download(DATA_URL, str(DATA_PATH), quiet=False)
+        if not downloaded or not DATA_PATH.exists():
+            raise RuntimeError(
+                "Dataset download failed. Confirm the Google Drive file is "
+                "shared as Anyone with the link."
+            )
 
     # ── Step 3: Load and clean data ──────────────────────────────────────────
     df = pd.read_csv(DATA_PATH)
     df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
     df = df.drop(columns=["employeeno"])
     df["qualification"] = df["qualification"].fillna(df["qualification"].mode()[0])
-    df["Age"] = 2025 - df["year_of_birth"]
+    df["Age"] = REFERENCE_YEAR - df["year_of_birth"]
 
     # ── Step 4: Apply log1p to skewed features ───────────────────────────────
     for col in ["trainings_attended", "training_score_average", "last_performance_score"]:
@@ -312,7 +324,14 @@ def build_model():
 
     return full_pipeline
 
-model = build_model()
+try:
+    model = build_model()
+except Exception as exc:
+    st.error(
+        "❌ The promotion model could not be built. "
+        f"{type(exc).__name__}: {exc}"
+    )
+    st.stop()
 
 
 # ─── Hero Banner ───────────────────────────────────────────────────────────────
